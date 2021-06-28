@@ -1,0 +1,372 @@
+---
+title: "STAT 413/613 Homework: Tidy Text"
+author: "Chi-Yun, Liu"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: no
+    toc_depth: 4
+    number_sections: yes
+    theme: cerulean
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.align  = "center",
+                      fig.height = 5, 
+                      fig.width  = 6)
+```
+
+# Instructions {-}
+1. Clone this homework repo to your homework directory as a new repo.
+2. Rename the starter file under the analysis directory as `hw_01_yourname.Rmd` and use it for your solutions.   
+3. Modify the "author" field in the YAML header.  
+4. Stage and Commit R Markdown and HTML files (no PDF files).   
+5. **Push both .Rmd and HTML files to GitHub**.   
+- Make sure you have knitted to HTML prior to staging, committing, and pushing your final submission.  
+6. **Commit each time you answer a part of question, e.g. 1.1**   
+7. **Push to GitHub after each major question**   
+8. When complete, submit a response in Canvas  
+
+- Only include necessary code to answer the questions.
+- Most of the functions you use should be from the tidyverse. 
+- Unnecessary Base R or other packages not covered in class will result in point deductions.
+- Use Pull requests and or email to ask me any questions. If you email, please ensure your most recent code is pushed to GitHub.
+
+
+# Sentiment Analysis
+
+1. Download the following two works from the early 20^th^ century from Project Gutenberg:
+- Upton Sinclair: "*The Jungle*" (1906)
+- W.E.B. Du Bois: "*The Quest of the Silver Fleece*" (1911)
+
+```{r message=FALSE}
+library(tidyverse)
+library(tidytext)
+library(gutenbergr)
+```
+  
+```{r}
+# find first book -- Upton Sinclair: "The Jungle" (1906)
+gutenberg_works() %>%
+  filter(title == "The Jungle")
+# find second book --  W.E.B. Du Bois: "The Quest of the Silver Fleece" (1911)
+gutenberg_works() %>%
+  filter(str_detect(title,"The Quest of the Silver Fleece"))%>% head()
+
+
+jungle_books <- gutenberg_download(140)
+silver_books <- gutenberg_download(15265)
+```
+
+
+2. Write a function `to take an argument of a downloaded book tibble and return it in tidy text format.
+- The function must add line and chapter numbers as variables
+- The function must unnest tokens at the word level
+- The function must remove any Project Gutenberg formatting so only the words remain
+- The function must remove any stop_words and filter out any `NA`s
+- The function must remove any front matter (words before Chapter 1)
+- The function can consider the unique nature of the front matter but cannot consider exactly how many chapters are in each book based on looking at the data i.e., no math based on knowing the number of chapters. 
+
+```{r}
+data(stop_words)
+
+tidy_books <- function(books_tibble){
+
+books_tibble %>%
+  mutate(linenumber = row_number(),  # add line     
+         text = recode(text, "_Contents_" = "Contents",
+                       "_Note_" = "Note"),
+           chapter = cumsum(str_detect(text,   #add chapter numbers
+                                       regex("(^chapter [\\divxlc])|((^_[a-z]+)(_$))", ignore_case = TRUE)))) %>%  
+  unnest_tokens(word, text) %>% # unnest tokens
+  mutate(word = str_extract(word, "[a-z']+")) %>% # remove formatting
+  anti_join(stop_words, by = "word") %>% # remove stop_words
+  filter(!is.na(word)) %>%    # filter out any NAs
+  filter(chapter != 0) -> books_tibble # remove any front matter (words before Chapter 1)
+ 
+  
+  return(books_tibble)
+}
+
+```
+   
+
+3. Use the function from step 2
+- Tidy each book and then add `book` and `author` as variables and save each tibble to a new variable. How many rows are in each book?
+
+```{r}
+tidy_books(jungle_books) %>% 
+  mutate(book = "The Jungle",
+         author = "Sinclair, Upton") -> new_jungle_books
+nrow(new_jungle_books)
+
+tidy_books(silver_books) %>% 
+  mutate(book = "The Quest of the Silver Fleece: A Novel",
+         author = "Du Bois, W. E. B. (William Edward Burghardt)") -> new_silver_books
+nrow(new_silver_books)
+```
+
+4. Use a dplyr function to combine the two tibbles into a new tibble. 
+- It should have 89,434 rows with 6 variables
+
+```{r}
+new_jungle_books %>% 
+  full_join(new_silver_books, by = c("gutenberg_id", "linenumber", "chapter", "word", "book", "author"))->books_df
+
+dim(books_df)
+```
+
+5. Measure the net sentiment using bing for each block of 50 lines
+- Plot the sentiment for each book in an appropriate faceted plot - either line or column. 
+- Be sure to remove the legend.
+- Save the plot to a variable
+- Interpret the plots for each book and compare them.
+
+```{r}
+books_df %>% 
+  inner_join(get_sentiments("bing"), by = "word") %>% 
+  count(book, index = linenumber %/% 50, sentiment) %>% 
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = list(n=0)) %>% 
+  mutate(net = positive - negative) ->
+  book_bing_sentiment
+
+book_bing_sentiment %>%
+  ggplot(aes(x= index, y = net, fill = book)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~book, ncol = 2, scales = "free_x")-> plot_50
+ plot_50
+```
+
+* Both books have negative sentiment more than positive sentiment. *The Jungle* has more negative sentiment than *the Quest of the Silver Fleece: A Novel*.
+
+6. Measure the total for each nrc sentiment in each block of 500 lines and then,
+- Filter out the "positive" and "negative" and save to a new variable. You should have 464 observations.
+- Plot the count of the sentiments for each block in each book in an appropriate faceted plot with the books in two columns and the sentiments in 8 rows. 
+- Be sure to remove the legend.
+- Interpret the plots for each book and then compare them. 
+- Why did the values drop off so suddenly at the end?
+
+```{r}
+books_df %>% 
+  inner_join(get_sentiments("nrc"), by = "word") %>% 
+  count(book, index = linenumber %/% 500, sentiment) %>% 
+  filter(sentiment != "positive" & sentiment != "negative")-> book_nrc_sentiment
+
+book_nrc_sentiment %>%
+  ggplot(aes(x = index, y = n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_grid(~book)
+```
+
+* As the plot, the ratio of each nrc sentiment in each block of 500 lines of each book is quite similar. Since a lot of words from the last 500-line block of text the words are not in nrc, the values drop off so suddenly at the end.
+
+7. Using bing, create a new data frame with the counts of the positive and negative sentiment words for each book.
+- Show the "top 20" most frequent words across both books along with their book, sentiment, and count, in descending order by count.
+- What are the positive words in the list of "top 20"?
+
+```{r}
+books_df %>% 
+  inner_join(get_sentiments("bing"), by = "word") %>% 
+  count(book, word, sentiment, sort = TRUE) %>% 
+  ungroup()-> count_bing_sentiment
+count_bing_sentiment
+
+# top 20 most frequent words
+top20 <- slice_head(count_bing_sentiment, n = 20) 
+top20
+
+top20 %>% 
+  filter(sentiment == "positive")
+```
+
+8. Plot the top ten for each positive and negative sentiment faceting by book.
+- Ensure each facet has the words in the proper order for that book.
+- Identify any that may be inappropriate for the context of the book and should be excluded from the sentiment analysis.
+
+```{r}
+count_bing_sentiment %>% 
+  group_by(book, sentiment) %>%
+  slice_max(order_by = n, n=10) %>% 
+  ungroup() %>%
+  mutate(word = reorder_within(word, n, book)) %>%
+  ungroup() %>% 
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(sentiment~book, scales = "free_y") +
+  scale_x_reordered() +
+  labs(y = "Contribution to sentiment", x = NULL) +
+  coord_flip()
+```
+
+* We should remove "miss" from the sentiment analysis because "miss" is not appropriate to identify as a negative word only. "miss" can be used as a form of address for a girl or young woman.
+
+9. Remove the inappropriate word(s) from the analysis.
+- Replot the top 10 for each sentiment per book from step 8.
+- Interpret the plots
+
+```{r}
+count_bing_sentiment %>% 
+  group_by(book, sentiment) %>%
+  filter(word != "miss") %>% 
+  slice_max(order_by = n, n=10) %>% 
+  ungroup() %>%
+  mutate(word = reorder_within(word, n, book)) %>%
+  ungroup() %>% 
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(sentiment~book, scales = "free_y") +
+  scale_x_reordered() +
+  labs(y = "Contribution to sentiment", x = NULL) +
+  coord_flip()
+```
+
+* We removed "miss" here since it cannot be identified correctly by counting. After removing "miss", the book -- the Quest of the Silver Fleece: A Novel is still having more negative words than positive words. Another book -- the jungle is also having more negative words than positive words.
+
+10. Rerun the analysis from step 5 and recreate the plot with the title "Custom Bing".
+- Show both the original step 5 plot with the new plot in the same output graphic, one on top of the other.
+- Interpret the plots
+
+```{r}
+# Original from step 5
+# data
+books_df %>% 
+  inner_join(get_sentiments("bing"), by = "word") %>% 
+  count(book, index = linenumber %/% 50, sentiment) %>% 
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = list(n=0)) %>% 
+  mutate(net = positive - negative) ->
+  book_bing_sentiment
+# plot
+book_bing_sentiment %>%
+  ggplot(aes(x= index, y = net, fill = book)) +
+  geom_col(show.legend = FALSE) +
+  ggtitle("With Miss as Negative") +
+  facet_wrap(~book, ncol = 2, scales = "free_x")-> plot_50
+
+# new --- no miss
+# data
+get_sentiments("bing") %>%
+  filter(word != "miss") -> bing_no_miss
+
+books_df %>% 
+  inner_join(bing_no_miss, by = "word") %>% 
+  count(book, index = linenumber %/% 50, sentiment) %>% 
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = list(n=0)) %>% 
+  mutate(net = positive - negative) ->
+  book_bing_sentiment_new
+# plot
+book_bing_sentiment_new %>%
+  ggplot(aes(x= index, y = net, fill = book)) +
+  geom_col(show.legend = FALSE) +
+  ggtitle("Without Miss as Negative") +
+  facet_wrap(~book, ncol = 2, scales = "free_x")-> plot_50_new
+
+library(gridExtra)
+grid.arrange(plot_50, plot_50_new, ncol=1)
+```
+
+* The plot at the bottom shows that there is nothing very different after removing the "miss". In other words, removing "miss" did not bring influence in the analysis.
+
+# tf-idf for Mark Twain's books
+
+1. Use a single call to download all the following complete books at once from author Mark Twain from Project Gutenberg
+- Use the meta_fields argument to include the Book title as part of the download
+- *Huckleberry Finn*,  *Tom Sawyer* , *Connecticut Yankee in King Arthur's Court*, *Life on the Mississippi* , *Prince and the Pauper*,  and *A Tramp Abroad* 
+
+```{r}
+# find the books
+gutenberg_works() %>%
+  filter(str_detect(author,"Twain"))
+
+twain_books <- gutenberg_download(c(74,76,86, 119, 245, 1837), meta_fields = "title") 
+```
+
+2. Modify your earlier function or create a new one to output a tf-idf ready dataframe (**leave the the stop words in the text**)
+- Unnest, remove any formatting, and get rid of any `NA`s  
+- Add the count for each word by title.
+- Use your function to tidy the downloaded texts and save to a variable. It should have 56,759 rows.
+
+```{r}
+tidy_books_tf <- function(twain_tf){
+
+twain_tf %>%
+  unnest_tokens(word, text) %>%
+  mutate(word = str_extract(word, "[a-z']+")) %>%
+  filter(!is.na(word)) %>% 
+  count(title, word, sort = TRUE) -> twain_books_words
+
+
+twain_books_words %>%
+  bind_tf_idf(word, title, n) %>%
+  mutate(word = fct_reorder(word, tf_idf))->twain_tf
+  return(twain_tf)
+}
+
+twain_tf_df <- tidy_books_tf(twain_books)
+dim(twain_tf_df)
+```
+
+3. Calculate the tf-idf
+- Save back to the data frame.
+```{r}
+twain_tf_df %>%
+  bind_tf_idf(word, title, n) ->
+  twain_tf_idf
+
+twain_tf_idf
+```
+
+4. Plot the tf for each book using a faceted graph.
+- Facet by book and constrain the data or the X axis to see the shape of the distribution.
+```{r}
+twain_tf_idf %>% 
+  ggplot(aes(x = tf, fill = title)) +
+  geom_histogram(show.legend = FALSE) +
+  labs(x = "tf") +
+  facet_wrap(~title, ncol = 2, scales = "free_y")+
+  xlim(NA, 0.0015)
+```
+
+5. Show the words with the 15 highest tf-idfs across across all books
+- Only show those rows.
+- How many look like possible names?
+  
+```{r}
+twain_tf_idf %>%
+  arrange(desc(tf_idf)) %>% 
+  slice_head(n = 15)
+```
+
+* hendon, becky, canty, joe, huck. 5 words look like possible names.
+   
+6.  Plot the top 7 tf_idf words from each book.
+- Sort in descending order of tf_idf
+- Interpret the plots.
+
+```{r}
+twain_tf_idf %>% 
+  group_by(title) %>% 
+  top_n(7, tf_idf) %>%
+  ungroup() %>%
+  mutate(word = reorder_within(word, tf_idf, title)) %>%
+  ggplot(aes(word, tf_idf, fill = title)) +
+    geom_col(show.legend = FALSE) +
+    labs(x = NULL, y = "tf-idf") +
+    facet_wrap(~title, ncol = 2, scales = "free_y") +
+    coord_flip() +
+    scale_x_reordered()
+```
+
+* For each book, the real names and position titles are used a lot, except Adventures of Huckleberry Finn. Adventures of Huckleberry Finn use a lot of negative words.
+
+# Extra Credit Podcasts
+
+- Choose **One** of the following podcasts and answer the questions below:  
+
+a. [Sentiment Preserving Fake Reviews](https://podcasts.apple.com/us/podcast/data-skeptic/id890348705?i=1000483067378)  
+The [Original paper](https://arxiv.org/abs/1907.09177)
+
+b. [Data in  Life: Authorship Attribution in Lennon-McCartney Songs](https://podcasts.apple.com/us/podcast/authorship-attribution-of-lennon-mccartney-songs/id890348705?i=1000485519404)
+
+1. What are some key ideas from this podcast relevant to text sentiment analysis/authorship attribution?
+
+2. How do you think the ideas discussed may be relevant in your future work?
